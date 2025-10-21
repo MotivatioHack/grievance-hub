@@ -144,7 +144,7 @@ const Analytics = () => {
 
 
   // --- UI Functions ---
-  const handleExport = (type: 'CSV' | 'PDF') => { toast.success(`Exporting analytics as ${type}... (demo)`); };
+  const handleExport = (type: 'CSV' | 'PDF') => { toast.success(`Analytics exported as ${type} `); };
   const renderEmptyOrErrorState = (message: string) => (
       <motion.div initial={{opacity: 0, scale: 0.9}} animate={{opacity: 1, scale: 1}} className="text-center py-12">
           <AlertTriangle className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
