@@ -6,9 +6,9 @@ import { escalateComplaints } from './controllers/escalation.controller.js';
 const PORT = process.env.PORT || 5000;
 
 sequelize.sync({ force: false }).then(() => {
-  console.log('Database connected...');
+  console.log('🧠 DATABASE LINK ESTABLISHED ...');
   app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`⚡ GRIEVANCEHUB SERVER ONLINE ${PORT}`);
   });
 });
 

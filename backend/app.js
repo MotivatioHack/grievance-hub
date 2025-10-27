@@ -21,8 +21,17 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-app.use(cors());
-app.use(helmet()); // Consider configuring helmet further for production
+// Configure CORS with specific options
+app.use(cors({
+    origin: ['http://localhost:8080', 'http://localhost:5173'], // Allow both development ports
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true // Allow credentials
+}));
+
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" } // Allow cross-origin resource sharing
+})); 
 app.use(morgan('dev'));
 // Body parsers are added within specific routes now
 

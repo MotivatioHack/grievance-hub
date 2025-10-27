@@ -5,7 +5,8 @@ import User from '../models/user.model.js';
 import Comment from '../models/comment.model.js';
 import Escalation from '../models/escalation.model.js';
 import TimelineEvent from '../models/timelineEvent.model.js';
-import { jsPDF } from 'jspdf';
+import pkg from 'jspdf';
+const { jsPDF } = pkg;
 import 'jspdf-autotable';
 
 // --- EXISTING FUNCTIONS ---
@@ -83,5 +84,122 @@ export const escalateComplaintById = async (req, res) => {
 // --- END export KEYWORD ADDITION ---
 
 
-export const exportComplaintsCSV = async (req, res) => { /* ... existing code ... */ };
-export const exportComplaintsPDF = async (req, res) => { /* ... existing code ... */ };
+export const exportComplaintsCSV = async (req, res) => {
+    console.log("✅ Admin: Received request to export complaints as CSV");
+    try {
+        const complaints = await Complaint.findAll({
+            include: [{ model: User, attributes: ['name', 'role'] }],
+            order: [['createdAt', 'DESC']]
+        });
+
+        // Create CSV header
+        let csv = 'ID,Title,Description,Category,Status,Created By,Created At,Updated At\n';
+
+        // Add data rows
+        complaints.forEach(complaint => {
+            const row = [
+                complaint.id,
+                `"${complaint.title.replace(/"/g, '""')}"`,
+                `"${complaint.description.replace(/"/g, '""')}"`,
+                complaint.category,
+                complaint.status,
+                complaint.User ? complaint.User.name : 'Unknown',
+                new Date(complaint.createdAt).toISOString().split('T')[0],
+                new Date(complaint.updatedAt).toISOString().split('T')[0]
+            ];
+            csv += row.join(',') + '\n';
+        });
+
+        // Set response headers
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=complaints.csv');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+        
+        // Send the CSV data
+        res.send(csv);
+        console.log("👍 Admin: Successfully exported complaints to CSV");
+    } catch (error) {
+        console.error("❌ Admin: Error exporting complaints to CSV:", error);
+        res.status(500).json({ message: "Failed to export complaints to CSV" });
+    }
+};
+
+export const exportComplaintsPDF = async (req, res) => {
+    console.log("✅ Admin: Received request to export complaints as PDF");
+    try {
+        const complaints = await Complaint.findAll({
+            include: [{ model: User, attributes: ['name', 'role'] }],
+            order: [['createdAt', 'DESC']]
+        });
+
+        // Create new PDF document
+        const doc = new jsPDF();
+        
+        // Set initial position
+        let yPos = 20;
+        
+        // Add title
+        doc.setFontSize(16);
+        doc.text('Complaints Report', 15, yPos);
+        yPos += 10;
+        
+        doc.setFontSize(12);
+        doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 15, yPos);
+        yPos += 15;
+
+        // Add header
+        doc.setFontSize(10);
+        doc.setTextColor(41, 128, 185);
+        const headers = ['ID', 'Title', 'Category', 'Status', 'Created By'];
+        const columnWidths = [20, 60, 30, 30, 40];
+        let xPos = 15;
+        
+        // Draw header
+        headers.forEach((header, index) => {
+            doc.text(header, xPos, yPos);
+            xPos += columnWidths[index];
+        });
+        
+        // Reset text color for data
+        doc.setTextColor(0, 0, 0);
+        yPos += 10;
+
+        // Add data rows
+        complaints.forEach((complaint, index) => {
+            // Check if we need a new page
+            if (yPos > 270) {
+                doc.addPage();
+                yPos = 20;
+            }
+
+            xPos = 15;
+            const rowData = [
+                complaint.id.toString(),
+                complaint.title.substring(0, 25) + (complaint.title.length > 25 ? '...' : ''),
+                complaint.category,
+                complaint.status,
+                complaint.User ? complaint.User.name : 'Unknown'
+            ];
+
+            rowData.forEach((text, colIndex) => {
+                doc.text(text.toString(), xPos, yPos);
+                xPos += columnWidths[colIndex];
+            });
+
+            yPos += 10;
+        });
+
+        // Set response headers
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename=complaints.pdf');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+        
+        // Send the PDF buffer
+        const pdfBuffer = Buffer.from(doc.output('arraybuffer'));
+        res.send(pdfBuffer);
+        console.log("👍 Admin: Successfully exported complaints to PDF");
+    } catch (error) {
+        console.error("❌ Admin: Error exporting complaints to PDF:", error);
+        res.status(500).json({ message: "Failed to export complaints to PDF" });
+    }
+};

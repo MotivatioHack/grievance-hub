@@ -2,11 +2,12 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Link, Navigate } from "react-router-dom";
 import { ArrowLeft, Download, BarChart3, PieChart, TrendingUp, AlertTriangle } from "lucide-react";
+// Corrected import path again - ensure this path matches your project structure
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/button";
 import { BarChart, Bar, PieChart as RechartsPie, Pie, LineChart, Line, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { toast } from "sonner";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/skeleton"; // Assuming Skeleton is used for loading, if not remove
 
 // Define the structure of the fetched analytics data
 interface AnalyticsData {
@@ -43,6 +44,7 @@ const Analytics = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
+  const [isExporting, setIsExporting] = useState<'CSV' | 'PDF' | null>(null);
 
   // Effect 1: Parse user data from localStorage on component mount
   useEffect(() => {
@@ -53,8 +55,9 @@ const Analytics = () => {
         const parsed: UserData = JSON.parse(userString);
         console.log("Analytics Mount: Parsed user data:", parsed);
         // Basic validation of parsed data
-        if (parsed && parsed.token && parsed.role === 'Admin') {
+        if (parsed && typeof parsed.token === 'string' && parsed.role === 'Admin') {
            setCurrentUser(parsed);
+           console.log("Analytics Mount: Admin user set.");
         } else {
             console.error("Analytics Mount: Invalid user data or not Admin:", parsed);
             setError("Stored user data is invalid or user is not an Admin. Please log in again.");
@@ -75,9 +78,10 @@ const Analytics = () => {
   // Effect 2: Fetch analytics data *after* currentUser state is successfully set
   useEffect(() => {
     // Only run if currentUser has been set and we are not in an error state from the first effect
-    if (!currentUser || error) {
-        // If loading is still true, it means the initial user check failed.
-        if (loading) setLoading(false);
+    if (!currentUser) {
+        // If still loading and no user found from first effect, stop loading.
+        // Avoid setting loading false if an error was already set in the first effect.
+        if (loading && !error) setLoading(false);
         return;
     }
 
@@ -88,7 +92,9 @@ const Analytics = () => {
       try {
         const response = await fetch("http://localhost:5000/api/admin/analytics", {
           headers: {
-            Authorization: `Bearer ${currentUser.token}`, // Use token from state
+            // CRITICAL: Ensure the Authorization header is correctly formatted
+            'Authorization': `Bearer ${currentUser.token}`,
+            'Content-Type': 'application/json' // Although GET, good practice sometimes
           },
         });
         console.log("Analytics Fetch: Response status:", response.status);
@@ -97,12 +103,12 @@ const Analytics = () => {
           let errorMsg = `HTTP Error: ${response.status}`;
           try {
             const errorData = await response.json();
-             errorMsg = errorData.message || errorMsg;
+             errorMsg = errorData.message || errorMsg; // Use backend message if available
              console.error("Analytics Fetch: API Error response:", errorData);
-             // Specifically handle 401/403 errors more gracefully
+             // Specifically handle 401/403 errors -> Clear state and prompt re-login
              if (response.status === 401 || response.status === 403) {
-                 errorMsg = "Authorization failed. Your session might have expired. Please log in again.";
-                 localStorage.removeItem('user'); // Clear invalid token
+                 errorMsg = "Authorization failed. Your session might have expired or is invalid. Please log in again.";
+                 localStorage.removeItem('user'); // Clear potentially invalid stored data
                  setCurrentUser(null); // Clear user state to trigger re-render/redirect
              }
           } catch (e) { console.warn("Analytics Fetch: Could not parse error response body.");}
@@ -112,10 +118,11 @@ const Analytics = () => {
         const data: AnalyticsData = await response.json();
         console.log("Analytics Fetch: Successfully fetched data:", data);
 
-        // Check if data is meaningfully empty
-        if (!data || !data.complaintsByCategory || data.complaintsByCategory.length === 0) {
-            console.warn("Analytics Fetch: Data received but seems empty.");
-            setError("No analytics data found. Ensure complaints exist in the database.");
+        // Check if data is meaningfully empty (adjust condition as needed)
+        // Check summaryStats first as it's less likely to be empty if data exists
+        if (!data || !data.summaryStats || typeof data.summaryStats.totalComplaints !== 'number') {
+            console.warn("Analytics Fetch: Data received but seems invalid or empty.");
+             // Don't set error, just indicate no data; let renderEmptyOrErrorState handle message
             setAnalyticsData(null);
         } else {
             setAnalyticsData(data);
@@ -124,8 +131,8 @@ const Analytics = () => {
       } catch (err: any) {
         console.error("Analytics Fetch: Error during fetch process:", err);
         setError(err.message || "An unknown error occurred while fetching data.");
-        toast.error(err.message || "An unknown error occurred.");
-        setAnalyticsData(null);
+        toast.error(err.message || "An unknown error occurred while fetching data.");
+        setAnalyticsData(null); // Clear data on error
       } finally {
         console.log("Analytics Fetch: Finished, setting loading false.");
         setLoading(false);
@@ -136,15 +143,48 @@ const Analytics = () => {
 
   }, [currentUser]); // Re-run fetch ONLY when currentUser state changes
 
-  // Redirect Logic - redirect if not loading and no valid currentUser exists
-  if (!loading && !currentUser && !error) {
-     console.log("Analytics Render: Redirecting to login. No valid user.");
+  // Redirect Logic - redirect immediately if loading finished and no valid user found
+  // AND there isn't already an auth-related error message being shown
+  if (!loading && !currentUser && (!error || !error.includes("Authorization failed"))) {
+     console.log("Analytics Render: Redirecting to login. No valid user state and no relevant error.");
      return <Navigate to="/login" replace />; // Use replace to avoid back button issues
   }
 
 
-  // --- UI Functions ---
-  const handleExport = (type: 'CSV' | 'PDF') => { toast.success(`Analytics exported as ${type} `); };
+  // --- Dynamic Export Handler ---
+  const handleExport = async (type: 'CSV' | 'PDF') => {
+    if (!currentUser?.token) { toast.error("Authentication error. Cannot export data."); return; }
+    setIsExporting(type);
+    toast.info(`Generating ${type} report...`);
+    const endpoint = type.toLowerCase();
+    const filename = `grievance-report-${new Date().toISOString().split('T')[0]}.${endpoint}`;
+    try {
+        const response = await fetch(`http://localhost:5000/api/admin/complaints/export/${endpoint}`, {
+            headers: { Authorization: `Bearer ${currentUser.token}` },
+        });
+        if (!response.ok) {
+            let errorMsg = `Failed to export ${type}`;
+            try {
+                const errorData = await response.json();
+                errorMsg = errorData.message || errorMsg;
+            } catch(e) {}
+             // Handle potential auth errors during export too
+            if (response.status === 401 || response.status === 403) {
+                 errorMsg = "Authorization failed during export. Please log in again.";
+                 localStorage.removeItem('user');
+                 setCurrentUser(null);
+            }
+            throw new Error(errorMsg);
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.style.display = 'none'; a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+        toast.success(`${type} report downloaded successfully!`);
+    } catch (err: any) { toast.error(err.message); }
+    finally { setIsExporting(null); }
+  };
+
   const renderEmptyOrErrorState = (message: string) => (
       <motion.div initial={{opacity: 0, scale: 0.9}} animate={{opacity: 1, scale: 1}} className="text-center py-12">
           <AlertTriangle className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
@@ -155,7 +195,6 @@ const Analytics = () => {
           )}
       </motion.div>
   );
-  // --- End UI Functions ---
 
   return (
     <main className="flex-1 container mx-auto px-4 py-12">
@@ -168,20 +207,23 @@ const Analytics = () => {
               <p className="text-muted-foreground">Live insights into complaint management</p>
             </div>
             <div className="flex gap-2 mt-4 sm:mt-0">
-              <Button onClick={() => handleExport('CSV')} variant="outline" className="border-neon-cyan hover:neon-glow"><Download className="mr-2" size={18} /> Export CSV</Button>
-              <Button onClick={() => handleExport('PDF')} variant="outline" className="border-neon-purple hover:neon-glow"><Download className="mr-2" size={18} /> Export PDF</Button>
+              <Button onClick={() => handleExport('CSV')} variant="outline" className="border-neon-cyan hover:neon-glow" disabled={!!isExporting}>
+                <Download className="mr-2" size={18} /> {isExporting === 'CSV' ? 'Generating...' : 'Export CSV'}
+              </Button>
+              <Button onClick={() => handleExport('PDF')} variant="outline" className="border-neon-purple hover:neon-glow" disabled={!!isExporting}>
+                 <Download className="mr-2" size={18} /> {isExporting === 'PDF' ? 'Generating...' : 'Export PDF'}
+              </Button>
             </div>
           </div>
 
-          {/* Main Content Area: Loading, Error, or Data */}
+          {/* Main Content Area */}
           {loading ? (
              <div className="flex justify-center items-center py-20"><GlowingSpinner /></div>
-          ) : error ? ( // Display error message if it exists
+          ) : error ? (
              <GlassCard>{renderEmptyOrErrorState(error)}</GlassCard>
-          ) : !analyticsData ? ( // Display empty state if no error but data is null/empty
-             <GlassCard>{renderEmptyOrErrorState("No data was returned or data is empty. Ensure complaints exist.")}</GlassCard>
+          ) : !analyticsData ? (
+             <GlassCard>{renderEmptyOrErrorState("No data was returned. Ensure complaints exist.")}</GlassCard>
           ) : (
-            // Render charts only if loading is false, no error, and analyticsData exists
             <div className="grid lg:grid-cols-2 gap-6">
                 {/* Complaints by Category */}
                 <GlassCard>
@@ -231,7 +273,7 @@ const Analytics = () => {
                             <Line type="monotone" dataKey="complaints" stroke="#00c8ff" strokeWidth={3} dot={{ fill: "#00c8ff", r: 6 }} activeDot={{ r: 8 }}/>
                           </LineChart>
                         </ResponsiveContainer>
-                    ) : (<p className="text-muted-foreground text-center py-10">No trend data available for the last 6 months.</p>)}
+                    ) : (<p className="text-muted-foreground text-center py-10">No trend data available.</p>)}
                 </GlassCard>
 
                 {/* Summary Stats */}
